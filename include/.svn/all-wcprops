@@ -1,0 +1,209 @@
+K 25
+svn:wc:ra_dav:version-url
+V 31
+/svn/!svn/ver/248/trunk/include
+END
+arraycopy.inc
+K 25
+svn:wc:ra_dav:version-url
+V 45
+/svn/!svn/ver/237/trunk/include/arraycopy.inc
+END
+cs_maxspeed_api_stocks.inc
+K 25
+svn:wc:ra_dav:version-url
+V 58
+/svn/!svn/ver/156/trunk/include/cs_maxspeed_api_stocks.inc
+END
+ZP_ItemModule.inc
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/90/trunk/include/ZP_ItemModule.inc
+END
+cs_player_models_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/!svn/ver/13/trunk/include/cs_player_models_api.inc
+END
+ZP_ItemModule_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/svn/!svn/ver/57/trunk/include/ZP_ItemModule_Const.inc
+END
+cs_maxspeed_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/svn/!svn/ver/156/trunk/include/cs_maxspeed_api.inc
+END
+ZP_Core_Stocks.inc
+K 25
+svn:wc:ra_dav:version-url
+V 50
+/svn/!svn/ver/218/trunk/include/ZP_Core_Stocks.inc
+END
+ZP_ClassModule_FileSystem.inc
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/!svn/ver/231/trunk/include/ZP_ClassModule_FileSystem.inc
+END
+ZP_ClassModule_Zombie.inc
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/!svn/ver/243/trunk/include/ZP_ClassModule_Zombie.inc
+END
+ZP_Log.inc
+K 25
+svn:wc:ra_dav:version-url
+V 42
+/svn/!svn/ver/172/trunk/include/ZP_Log.inc
+END
+ZP_GameModeModule.inc
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/svn/!svn/ver/160/trunk/include/ZP_GameModeModule.inc
+END
+ZP_CommandModule.inc
+K 25
+svn:wc:ra_dav:version-url
+V 52
+/svn/!svn/ver/180/trunk/include/ZP_CommandModule.inc
+END
+ZP_ClassModule_FileSystem_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 67
+/svn/!svn/ver/218/trunk/include/ZP_ClassModule_FileSystem_Const.inc
+END
+ZP_ClassModule_Zombie_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/svn/!svn/ver/218/trunk/include/ZP_ClassModule_Zombie_Const.inc
+END
+flags32.inc
+K 25
+svn:wc:ra_dav:version-url
+V 43
+/svn/!svn/ver/105/trunk/include/flags32.inc
+END
+ZP_Core.inc
+K 25
+svn:wc:ra_dav:version-url
+V 43
+/svn/!svn/ver/248/trunk/include/ZP_Core.inc
+END
+ZP_Core_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 49
+/svn/!svn/ver/212/trunk/include/ZP_Core_Const.inc
+END
+ZP_GunModule.inc
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/140/trunk/include/ZP_GunModule.inc
+END
+cs_ham_bots_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 51
+/svn/!svn/ver/127/trunk/include/cs_ham_bots_api.inc
+END
+ZP_ClassModule_Human.inc
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/svn/!svn/ver/164/trunk/include/ZP_ClassModule_Human.inc
+END
+cs_weap_models_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/svn/!svn/ver/127/trunk/include/cs_weap_models_api.inc
+END
+ZP_GunModule_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/svn/!svn/ver/223/trunk/include/ZP_GunModule_Const.inc
+END
+ZP_ClassModule_FileSystem_Stocks.inc
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/!svn/ver/213/trunk/include/ZP_ClassModule_FileSystem_Stocks.inc
+END
+colorchat.inc
+K 25
+svn:wc:ra_dav:version-url
+V 44
+/svn/!svn/ver/25/trunk/include/colorchat.inc
+END
+ZP_ClassModule_Human_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/!svn/ver/139/trunk/include/ZP_ClassModule_Human_Const.inc
+END
+ZP_ClassModule.inc
+K 25
+svn:wc:ra_dav:version-url
+V 50
+/svn/!svn/ver/243/trunk/include/ZP_ClassModule.inc
+END
+cs_teams_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 48
+/svn/!svn/ver/127/trunk/include/cs_teams_api.inc
+END
+cvar_util.inc
+K 25
+svn:wc:ra_dav:version-url
+V 45
+/svn/!svn/ver/231/trunk/include/cvar_util.inc
+END
+cs_weap_restrict_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/svn/!svn/ver/127/trunk/include/cs_weap_restrict_api.inc
+END
+ZP_ClassModule_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 56
+/svn/!svn/ver/232/trunk/include/ZP_ClassModule_Const.inc
+END
+cs_maxspeed_api_const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/!svn/ver/153/trunk/include/cs_maxspeed_api_const.inc
+END
+ZP_VarManager.inc
+K 25
+svn:wc:ra_dav:version-url
+V 49
+/svn/!svn/ver/203/trunk/include/ZP_VarManager.inc
+END
+amx_settings_api.inc
+K 25
+svn:wc:ra_dav:version-url
+V 52
+/svn/!svn/ver/150/trunk/include/amx_settings_api.inc
+END
+ZP_VarManager_Const.inc
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/!svn/ver/224/trunk/include/ZP_VarManager_Const.inc
+END

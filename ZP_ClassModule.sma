@@ -1,0 +1,1349 @@
+#pragma dynamic 8192
+
+#include <amxmodx>
+#include <amxmisc>
+#include <cvar_util>
+#include <colorchat>
+#include <cs_maxspeed_api_const>
+#include <arraycopy>
+
+#include <ZP_Core>
+#include <ZP_ClassModule_Const>
+#include <ZP_ClassModule_FileSystem>
+#include <ZP_VarManager>
+#include <ZP_GunModule>
+
+new const Plugin [] = "ZP Class Module";
+new const Version[] = "0.0.1";
+new const Author [] = "Tirant";
+
+#define MENU_OFFSET 25
+#define KNIFE_MAXSPEED 250.0
+
+static g_iCurClass[MAXPLAYERS+1];
+
+enum _:MenuInfo {
+	menu_ClassID = 0,
+	menu_NextClass,
+	menu_TypeID,
+	menu_GroupID,
+	menu_endstring
+};
+
+static Array:g_aClassTypes;
+static Trie:g_tClassTypeNames;
+static g_iClassTypeNum;
+
+static Array:g_aClassGroups;
+static Trie:g_tClassGroupNames;
+static g_iClassGroupNum;
+
+static Array:g_aClasses;
+static Trie:g_tClassNames;
+static g_iClassNum;
+
+static Array:g_aClassAbilities;
+static Trie:g_tClassAbilityNames;
+static g_iClassAbilityNum;
+
+enum ForwardedEvents {
+	fwDummy = 0,
+	fwNextClass,
+	fwGetExp,
+	fwClassApplied,
+	fwDataInitPre,
+	fwDataInitPost
+};
+
+static g_Forwards[ForwardedEvents];
+
+enum _:PCvars {
+	CVAR_XPMode = 0,
+	CVAR_AdminMode,
+	CVAR_ObeyLimits,
+	CVAR_MenuGroups,
+	CVAR_AutoClass
+};
+
+enum _:CvarModes {
+	Pointer,
+	Value
+};
+
+static g_pCvars[CvarModes][PCvars];
+
+static g_defaultClass[Class];
+
+public zp_fw_core_register_model() {
+	g_defaultClass[GroupID    ] = CLASSGROUP_NONE;
+	g_defaultClass[LocalID    ] = CLASS_NONE,
+	g_defaultClass[ModelID    ] = -1,
+	g_defaultClass[Health     ] = _:100.0;
+	g_defaultClass[Speed      ] = _:1.0;
+	g_defaultClass[Gravity    ] = _:1.0;
+	g_defaultClass[AbilityList] = _:ArrayCreate();
+	
+	g_aClassTypes = ArrayCreate(ClassType);
+	g_tClassTypeNames = TrieCreate();
+	
+	g_aClassGroups = ArrayCreate(ClassGroup);
+	g_tClassGroupNames = TrieCreate();
+	
+	g_aClasses = ArrayCreate(Class);
+	g_tClassNames = TrieCreate();
+	
+	g_aClassAbilities = ArrayCreate(ClassAbility);
+	g_tClassAbilityNames = TrieCreate();
+	
+	g_Forwards[fwDataInitPre] = CreateMultiForward("zp_fw_class_data_struc_init_pre", ET_IGNORE);
+	ExecuteForward(g_Forwards[fwDataInitPre], g_Forwards[fwDummy]);
+	
+	g_Forwards[fwDataInitPost] = CreateMultiForward("zp_fw_class_data_struc_init_pos", ET_IGNORE);
+	ExecuteForward(g_Forwards[fwDataInitPost], g_Forwards[fwDummy]);
+}
+
+public plugin_init() {
+	register_plugin(Plugin, Version, Author);
+	
+	arrayset(g_iCurClass, CLASS_NONE, MAXPLAYERS+1);
+	
+	/* Forwards */
+	/// Executed when a player selects a new class to inform any addons of this selection.
+	g_Forwards[fwNextClass	 ] = CreateMultiForward("zp_fw_class_selected", ET_IGNORE, FP_CELL, FP_CELL);
+	/// Executed when a menu is shown where a players experience need to be checked. Return their experience.
+	g_Forwards[fwGetExp	 ] = CreateMultiForward("zp_fw_class_get_exp", ET_CONTINUE, FP_CELL);
+	/// Executed when a player has a class applied. Give items or whatnot here.
+	g_Forwards[fwClassApplied] = CreateMultiForward("zp_fw_class_applied", ET_IGNORE, FP_CELL, FP_CELL);
+	
+	g_pCvars[Pointer][CVAR_XPMode    ] = CvarRegister("zp_class_xpmode", "0", "Controls whether or not experience requirements for classes should be obeyed", FCVAR_SERVER, .hasMin = true, .minValue = 0.0, .hasMax = true, .maxValue = 1.0 );
+	g_pCvars[Pointer][CVAR_AdminMode ] = CvarRegister("zp_class_adminmode", "1", "Controls whether or not admin flag requirements for classes should be obeyed", FCVAR_SERVER, .hasMin = true, .minValue = 0.0, .hasMax = true, .maxValue = 1.0 );
+	g_pCvars[Pointer][CVAR_ObeyLimits] = CvarRegister("zp_class_obeylimits", "1", "Controls whether or not class limits be obeyed", FCVAR_SERVER, .hasMin = true, .minValue = 0.0, .hasMax = true, .maxValue = 1.0 );
+	g_pCvars[Pointer][CVAR_MenuGroups] = CvarRegister("zp_class_showmenugroups", "1", "Controls whether or not to organize the class menu by groups", FCVAR_SERVER, .hasMin = true, .minValue = 0.0, .hasMax = true, .maxValue = 1.0 );
+	g_pCvars[Pointer][CVAR_AutoClass ] = CvarRegister("zp_class_autosingleclass", "1", "Controls whether or not to auto choose a single class", FCVAR_SERVER, .hasMin = true, .minValue = 0.0, .hasMax = true, .maxValue = 1.0 );
+	
+	for (new i; i < CvarModes; i++) {
+		CvarCache(g_pCvars[Pointer][i], CvarType_Int, g_pCvars[Value][i]);
+	}
+}
+
+public plugin_natives() {
+	register_library("ZP_ClassModule");
+	
+	register_native("zp_class_show_class_menu", 	"_showClassMenu",	 1);
+	register_native("zp_class_apply_class", 	"_applyClass",		 1);
+	
+	register_native("zp_class_register_type", 	"_registerClassType",	 0);
+	register_native("zp_class_register_type2", 	"_registerClassType2",	 0);
+	register_native("zp_class_is_valid_type", 	"_classTypeExists",	 1);
+	register_native("zp_class_get_type_by_name", 	"_getClassTypeByName",	 0);
+	register_native("zp_class_set_def_class_type", 	"_setDefaultClass",	 0);
+	register_native("zp_class_get_type_array", 	"_getClassTypeArray",	 1);
+	register_native("zp_class_class_has_ability", 	"_classHasAbility",	 1);
+	
+	register_native("zp_class_register_group", 	"_registerClassGroup",	 0);
+	register_native("zp_class_is_valid_group", 	"_classGroupExists",	 1);
+	register_native("zp_class_get_group_by_name", 	"_getClassGroupByName",	 0);
+	register_native("zp_class_get_class_list", 	"_getClassList",	 1);
+	register_native("zp_class_get_group_array", 	"_getClassGroupArray",	 1);
+	
+	register_native("zp_class_register_class", 	"_registerClass",	 0);
+	register_native("zp_class_is_valid_class", 	"_classExists",		 1);
+	register_native("zp_class_get_class_by_name", 	"_getClassByName",	 0);
+	register_native("zp_class_get_class_att", 	"_getClassAttribute",	 0);
+	register_native("zp_class_set_class_att", 	"_setClassAttribute",	 0);
+	register_native("zp_class_get_class_array", 	"_getClassArray",	 1);
+	
+	register_native("zp_class_register_ability", 	"_registerAbility",	 0);
+	register_native("zp_class_is_valid_ability", 	"_abilityExists",	 1);
+	register_native("zp_class_get_ability_by_name", "_getAbilityByName",	 0);
+	register_native("zp_class_add_ability",		"_addAbilityToClass",	 1);
+	register_native("zp_class_rem_ability",		"_removeAbilityFromClass", 1);
+	register_native("zp_class_get_ability_array", 	"_getAbilityArray",	 1);
+	register_native("zp_class_get_ability_name", 	"_getAbilityName",	 1);
+}
+
+public plugin_end() {
+	for (new i; i < g_iClassTypeNum; i++) {
+		zp_class_file_create_type(i);
+	}
+	
+	for (new i; i < g_iClassNum; i++) {
+		zp_class_file_create_class(i, g_aClasses, g_aClassGroups, g_aClassTypes);
+	}
+}
+
+public client_putinserver(id) {
+	resetPlayerInfo(id);
+}
+
+public client_disconnect(id) {
+	resetPlayerInfo(id);
+}
+
+resetPlayerInfo(id) {
+	g_iCurClass[id] = CLASS_NONE;
+}
+
+public zp_fw_core_infect(id) {
+	if (_classExists(g_iCurClass[id])) {
+		_applyClass(id, g_iCurClass[id]);
+	}
+}
+
+public zp_fw_core_cure(id) {
+	if (_classExists(g_iCurClass[id])) {
+		_applyClass(id, g_iCurClass[id]);
+	}
+}
+
+public zp_PlayerSpawn_Post(id, bool:isZombie) {
+	if (_classExists(g_iCurClass[id])) {
+		_applyClass(id, g_iCurClass[id]);
+	} else {
+		_showClassMenu(id, CLASS_NONE, CLASSTYPE_NONE, CLASSGROUP_NONE);
+	}
+	
+	if (!isZombie && is_module_loaded("ZP_GunModule") && g_iCurClass[id] != CLASS_NONE) {
+		zp_show_guns_menu(id, "", "ERROR");
+	}
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public bool:_applyClass(id, class) {
+	if (!is_user_connected(id)) {
+		zp_core_log_error("Invalid Player (%d)", id);
+		return false;
+	}
+	
+	if (!_classExists(class)) {
+		return false;
+	}
+	
+	static tempClass[Class];
+	if (_classExists(g_iCurClass[id])) {
+		ArrayGetArray(g_aClasses, g_iCurClass[id], tempClass);
+		tempClass[CurNumber]--;
+		ArraySetArray(g_aClasses, g_iCurClass[id], tempClass);
+	}
+	
+	g_iCurClass[id] = class;
+	
+	ArrayGetArray(g_aClasses, class, tempClass);
+	tempClass[CurNumber]++;
+	ArraySetArray(g_aClasses, class, tempClass);
+
+	zp_set(id, ZP_FL_health, 	tempClass[Health ]);
+	zp_set(id, ZP_FL_speed, 	tempClass[Speed  ]);
+	zp_set(id, ZP_FL_gravity,	tempClass[Gravity]);
+	zp_set(id, ZP_INT_modelid,	tempClass[ModelID]);
+	
+	ExecuteForward(g_Forwards[fwClassApplied], g_Forwards[fwDummy], id, class);
+	
+	return true;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _showClassMenu(id, nextclass, type, group) {
+	if (!is_user_connected(id)) {
+		zp_core_log_error("Invalid Player (%d)", id);
+		return;
+	}
+	
+	if (_classTypeExists(type)) {
+		showMenuOfGroups(id, nextclass, type);
+	} else if (_classGroupExists(group)) {
+		showMenuOfClasses(id, nextclass, group);
+	} else {
+		showMenuOfTypes(id, nextclass);
+	}
+}
+
+/**
+ * Internal function used to display a menu of types pertaining to a single faction. There
+ * is no input for the team because this is retrieved from the player to show the menu to.
+ * 
+ * @param id		Player index to display the menu to.
+ * @param nextclass	The next class for this player.
+ */
+showMenuOfTypes(id, nextclass) {
+	switch (ArraySize(g_aClassTypes)) {
+		case 0: {
+			zp_core_log_error("No types registered");
+		}
+		case 1: {
+			showMenuOfGroups(id, nextclass, 0);
+		}
+		default: {
+			static menuid, szMenu[128], itemInfo[MenuInfo];
+			itemInfo[menu_NextClass] = nextclass+MENU_OFFSET;
+			itemInfo[menu_TypeID] = CLASSTYPE_NONE+MENU_OFFSET;
+			itemInfo[menu_GroupID] = CLASSGROUP_NONE+MENU_OFFSET;
+			
+			static bool:isZombie;
+			isZombie = zp_core_is_user_zombie(id);
+			
+			formatex(szMenu, 127, "\r%L", LANG_PLAYER, (isZombie ? "CLASS_MENU_ZOMBIE" : "CLASS_MENU_HUMAN"));
+			menuid = menu_create(szMenu, "typeMenuSelected");
+			
+			static size;
+			size = ArraySize(g_aClassTypes);
+			
+			static tempClassType[ClassType], typesFound;
+			typesFound = 0;
+			for (new i; i < size; i++) {
+				ArrayGetArray(g_aClassTypes, i, tempClassType);
+				
+				if (isZombie == tempClassType[TeamID]) {
+					typesFound++;
+					formatex(szMenu, 127, "%s", tempClassType[TypeName]);
+					itemInfo[menu_ClassID] = i+MENU_OFFSET;
+					menu_additem(menuid, szMenu, itemInfo);
+				}
+			}
+			
+			if (typesFound > 0) {
+				formatex(szMenu, 127, "Back");
+				menu_setprop(menuid, MPROP_BACKNAME, szMenu);
+				formatex(szMenu, 127, "Next");
+				menu_setprop(menuid, MPROP_NEXTNAME, szMenu);
+				formatex(szMenu, 127, "Exit");
+				menu_setprop(menuid, MPROP_EXITNAME, szMenu);
+				menu_display(id, menuid);
+			} else {
+				zp_core_log_error("No types registered with this team (%s)", (isZombie ? "Zombie" : "Human"));
+			}
+		}
+	}
+}
+
+/**
+ * Public function called when a type is selected from a menu.
+ * 
+ * @param id		Player index selecting the item.
+ * @param menuid	The menu that the item is selected from.
+ * @param item		The item being selected.
+ */
+public typeMenuSelected(id, menuid, item) {
+	if (item == MENU_EXIT) {
+		menu_destroy(menuid);
+		return PLUGIN_HANDLED;
+	}
+	
+	static itemInfo[MenuInfo], dummy;
+	menu_item_getinfo(menuid, item, dummy, itemInfo, MenuInfo-1, _, _, dummy);
+	
+	for (new i; i < MenuInfo; i++) {
+		itemInfo[i] -= MENU_OFFSET;
+	}
+	
+	showMenuOfGroups(id, itemInfo[menu_NextClass], itemInfo[menu_ClassID]);
+	
+	menu_destroy(menuid);
+	return PLUGIN_HANDLED;
+}
+
+/**
+ * Internal function used to show a menu displaying all groups within a
+ * given type.
+ * 
+ * @param id		Player index to show the menu to.
+ * @param nextclass	The next class of this player.
+ * @param type		The type of which whose groups to display.
+ */
+showMenuOfGroups(id, nextclass, type) {
+	if (!_classTypeExists(type)) {
+		return;
+	}
+	
+	static tempClassType[ClassType];
+	ArrayGetArray(g_aClassTypes, type, tempClassType);
+	
+	static size;
+	size = ArraySize(tempClassType[GroupList]);
+	
+	if (size && !g_pCvars[Value][CVAR_MenuGroups]) {
+		showMenuOfAllClasses(id, nextclass, type);
+		return;
+	}
+	
+	switch (size) {
+		case 0: {
+			zp_core_log_error("No groups registered with this type (%d)", type);
+		}
+		case 1: {
+			showMenuOfClasses(id, nextclass, ArrayGetCell(tempClassType[GroupList], 0));
+		}
+		default: {
+			static menuid, szMenu[128], itemInfo[MenuInfo];
+			itemInfo[menu_NextClass] = nextclass+MENU_OFFSET;
+			itemInfo[menu_TypeID] = type+MENU_OFFSET;
+			itemInfo[menu_GroupID] = CLASSGROUP_NONE+MENU_OFFSET;
+			
+			formatex(szMenu, 127, "\r%s Group Menu", tempClassType[GroupName]);
+			menuid = menu_create(szMenu, "groupMenuSelected");
+			
+			static tempClassGroup[ClassGroup], tempGroup;
+			tempGroup = 0;
+			for (new i; i < size; i++) {
+				tempGroup = ArrayGetCell(tempClassType[GroupList], i);
+				ArrayGetArray(g_aClassGroups, tempGroup, tempClassGroup);
+				
+				formatex(szMenu, 127, "%s", tempClassGroup[GroupName]);
+				itemInfo[menu_ClassID] = tempGroup+MENU_OFFSET;
+				menu_additem(menuid, szMenu, itemInfo);
+			}
+			
+			formatex(szMenu, 127, "Back");
+			menu_setprop(menuid, MPROP_BACKNAME, szMenu);
+			formatex(szMenu, 127, "Next");
+			menu_setprop(menuid, MPROP_NEXTNAME, szMenu);
+			formatex(szMenu, 127, "Exit");
+			menu_setprop(menuid, MPROP_EXITNAME, szMenu);
+			menu_display(id, menuid);
+		}
+	}
+}
+
+/**
+ * Public function called whenever a group on a menu is selected.
+ * 
+ * @param id		Player index selecting the item.
+ * @param menuid	The menu the player is selecting from.
+ * @param item		The item being selected.
+ */
+public groupMenuSelected(id, menuid, item) {
+	if (item == MENU_EXIT) {
+		menu_destroy(menuid);
+		return PLUGIN_HANDLED;
+	}
+	
+	static itemInfo[MenuInfo], dummy;
+	menu_item_getinfo(menuid, item, dummy, itemInfo, MenuInfo-1, _, _, dummy);
+	
+	for (new i; i < MenuInfo; i++) {
+		itemInfo[i] -= MENU_OFFSET;
+	}
+	
+	showMenuOfClasses(id, itemInfo[menu_NextClass], itemInfo[menu_ClassID]);
+	
+	menu_destroy(menuid);
+	return PLUGIN_HANDLED;
+}
+
+/**
+ * Internal function that displays a menu of classes that belong to
+ * a single group.
+ * 
+ * @param id		Player index to show the menu to.
+ * @param nextclass	The next class for this player.
+ * @param group		The group whose classes to display.
+ */
+showMenuOfClasses(id, nextclass, group) {
+	static tempClassGroup[ClassGroup], size;
+	ArrayGetArray(g_aClassGroups, group, tempClassGroup);
+	size = ArraySize(tempClassGroup[ClassList]);
+	
+	if (size == 1 && g_pCvars[Value][CVAR_AutoClass]) {
+		
+	}
+	
+	switch (size) {
+		case 0: {
+			zp_core_log_error("No classes registered with this group (%d)", group);
+		}
+		/*case 1: {
+			// Singe class
+		}*/
+		default: {
+			static menuid, szMenu[128], itemInfo[MenuInfo];
+			itemInfo[menu_NextClass] = nextclass+MENU_OFFSET;
+			itemInfo[menu_TypeID] = CLASSTYPE_NONE+MENU_OFFSET;
+			itemInfo[menu_GroupID] = group+MENU_OFFSET;
+			
+			formatex(szMenu, 127, "\r%s Menu", tempClassGroup[GroupName]);
+			menuid = menu_create(szMenu, "classMenuSelected");
+			
+			static tempClass;
+			tempClass = 0;
+			for (new i; i < size; i++) {
+				tempClass = ArrayGetCell(tempClassGroup[ClassList], i);
+				addClassToMenu(id, menuid, itemInfo, nextclass, tempClass);
+			}
+			
+			formatex(szMenu, 127, "Back");
+			menu_setprop(menuid, MPROP_BACKNAME, szMenu);
+			formatex(szMenu, 127, "Next");
+			menu_setprop(menuid, MPROP_NEXTNAME, szMenu);
+			formatex(szMenu, 127, "Exit");
+			menu_setprop(menuid, MPROP_EXITNAME, szMenu);
+			menu_display(id, menuid);
+		}
+	}
+}
+
+/**
+ * Internal function that shows a menu of all classes. These classes will
+ * be displayed in group order still, but as a list, rather then sorted by
+ * group.
+ * 
+ * @param id		Player index to display the menu to.
+ * @param nextclass	The nextclass for this player.
+ * @param type		The class type to display all classes for.
+ */
+showMenuOfAllClasses(id, nextclass, type) {
+	static tempClassType[ClassType], size;
+	ArrayGetArray(g_aClassTypes, type, tempClassType);
+	size = ArraySize(tempClassType[GroupList]);
+	
+	switch (size) {
+		case 0: {
+			zp_core_log_error("No groups registered with this type (%d)", type);
+		}
+		/*case 1: {
+			showMenuOfGroups(id, nextclass, type);
+		}*/
+		default: {
+			static menuid, szMenu[128], itemInfo[MenuInfo];
+			itemInfo[menu_NextClass] = nextclass+MENU_OFFSET;
+			itemInfo[menu_TypeID] = type+MENU_OFFSET;
+			itemInfo[menu_GroupID] = CLASSGROUP_NONE+MENU_OFFSET;
+			
+			formatex(szMenu, 127, "\rClass Menu");
+			menuid = menu_create(szMenu, "classMenuSelected");
+			
+			static tempClassGroup[ClassGroup], curGroup, tempClass, classListSize;
+			ArrayGetArray(g_aClassGroups, 0, tempClassGroup);
+			curGroup = 0;
+			for (new i; i < size; i++) {
+				curGroup = ArrayGetCell(tempClassGroup[ClassList], i); 
+				ArrayGetArray(g_aClassGroups, curGroup, tempClassGroup);
+				classListSize = ArraySize(tempClassGroup[ClassList]);
+				
+				switch (classListSize) {
+					case 0: {
+						zp_core_log_error("No classes registered with this group (%d)", i);
+					}
+					default: {
+						tempClass = 0;
+						for (new i; i < classListSize; i++) {
+							tempClass = ArrayGetCell(tempClassGroup[ClassList], i);
+							addClassToMenu(id, menuid, itemInfo, nextclass, tempClass);
+						}
+					}
+				}
+			}
+	
+			formatex(szMenu, 127, "Back");
+			menu_setprop(menuid, MPROP_BACKNAME, szMenu);
+			formatex(szMenu, 127, "Next");
+			menu_setprop(menuid, MPROP_NEXTNAME, szMenu);
+			formatex(szMenu, 127, "Exit");
+			menu_setprop(menuid, MPROP_EXITNAME, szMenu);
+			menu_display(id, menuid);
+		}
+	}
+}
+
+/**
+ * Internal function that adds a given class onto a menu. This function
+ * will check all needed fields of a class requirement and format the
+ * item as it appears on the menu.
+ * 
+ * @param id		Player index used to determine eligability.
+ * @param menuid	The menuid for the item to be added to.
+ * @param itemInfo	The itemInfo for this class (should that information
+ * 			be filled out).
+ * @param nextclass	The nextclass that this user has selected.
+ * @param class		The class to add to the menu.
+ */
+bool:addClassToMenu(id, menuid, itemInfo[MenuInfo], nextclass, class) {
+	if (!_classExists(class)) {
+		return false;
+	}
+	
+	static tempClass[Class];
+	ArrayGetArray(g_aClasses, class, tempClass);
+
+	static szClassLimit[16];
+	if (g_pCvars[Value][CVAR_ObeyLimits]) {
+		szClassLimit[0] = '^0';
+		if (tempClass[MaxNumber]) {
+			formatex(szClassLimit, 15, "[%d/%d]", tempClass[CurNumber], tempClass[MaxNumber]);
+		}
+	}
+	
+	static szXPReq[32];
+	if (g_pCvars[Value][CVAR_XPMode]) {
+		static iXP;
+		iXP = -1;
+		ExecuteForward(g_Forwards[fwGetExp], iXP, id);
+		if (iXP < 0) {
+			set_pcvar_num(g_pCvars[Pointer][CVAR_XPMode], 0);
+		} else {
+			szXPReq[0] = '^0';
+			if (tempClass[XPReq] > iXP) {
+				formatex(szXPReq, 31, "(XP Needed %d)", tempClass[XPReq]);
+			}
+		}
+	}
+	
+	static szAdminFlags[32];
+	if (g_pCvars[Value][CVAR_AdminMode]) {
+		szAdminFlags[0] = '^0';
+		if (!access(id, tempClass[AdminLevel])) {
+			get_flags(tempClass[AdminLevel], szAdminFlags, 31);
+			format(szAdminFlags, 31, "(Admin '%s')", szAdminFlags);
+		}
+	}
+	
+	static szMenu[128];
+	if (class == nextclass) {
+		formatex(szMenu, 127, "\d%s [%s] %s %s %s", tempClass[ClassName], tempClass[ClassDesc], szClassLimit, szXPReq, szAdminFlags);
+	} else {
+		formatex(szMenu, 127, "%s \y[%s] \%c%s \r%s \r%s", tempClass[ClassName], tempClass[ClassDesc], (tempClass[CurNumber] >= tempClass[MaxNumber] ? 'r':'w'), szClassLimit, szXPReq, szAdminFlags);
+	}
+	
+	itemInfo[menu_ClassID] = class+MENU_OFFSET;
+	menu_additem(menuid, szMenu, itemInfo);
+	
+	return true;
+}
+
+/**
+ * Public function called whenever a class menu item is selected. This
+ * method ensures that the class is selectable and forwards the new class
+ * selected to and child plugins.
+ * 
+ * @param id		Player index selecting the item.
+ * @param menuid	The menuid of the menu being selected.
+ * @param item		The item being selected from the menu.
+ */
+public classMenuSelected(id, menuid, item) {
+	if (item == MENU_EXIT) {
+		menu_destroy(menuid);
+		return PLUGIN_HANDLED;
+	}
+	
+	static itemInfo[MenuInfo], dummy, tempClass[Class];
+	menu_item_getinfo(menuid, item, dummy, itemInfo, MenuInfo-1, _, _, dummy);
+	
+	for (new i; i < MenuInfo; i++) {
+		itemInfo[i] -= MENU_OFFSET;
+	}
+	
+	ArrayGetArray(g_aClasses, itemInfo[menu_ClassID], tempClass);
+	
+	if (tempClass[MaxNumber] && tempClass[CurNumber] >= tempClass[MaxNumber]) {
+		zp_print_color(id, "^1The limit for this class (^3%s^1) is full. [^4%d^1/^4%d^1]", tempClass[ClassName], tempClass[CurNumber], tempClass[MaxNumber]);
+		
+		menu_destroy(menuid);
+		_showClassMenu(id, itemInfo[menu_NextClass], itemInfo[menu_TypeID], itemInfo[menu_GroupID]);
+		return PLUGIN_HANDLED;
+	}
+	
+	if (g_pCvars[Value][CVAR_XPMode]) {
+		static iXP;
+		ExecuteForward(g_Forwards[fwGetExp], iXP, id);
+		if (tempClass[XPReq] > iXP) {
+			zp_print_color(id, "You do not have the required experience for this class. ^1(^4%d^1)", tempClass[XPReq]);
+			
+			menu_destroy(menuid);
+			_showClassMenu(id, itemInfo[menu_NextClass], itemInfo[menu_TypeID], itemInfo[menu_GroupID]);
+			return PLUGIN_HANDLED;
+		}
+	}
+	
+	if (g_pCvars[Value][CVAR_AdminMode] && !access(id, tempClass[AdminLevel])) {
+		static szFlags[32];
+		get_flags(tempClass[AdminLevel], szFlags, 31);
+		zp_print_color(id, "You do not have the required access level for this class. ^1('^4%s^1')", szFlags);
+		
+		menu_destroy(menuid);
+		_showClassMenu(id, itemInfo[menu_NextClass], itemInfo[menu_TypeID], itemInfo[menu_GroupID]);
+		return PLUGIN_HANDLED;
+	}
+	
+	ExecuteForward(g_Forwards[fwNextClass], g_Forwards[fwDummy], id, itemInfo[menu_ClassID]);
+	
+	zp_print_color(id, "You have selected the ^4%s ^1class", tempClass[ClassName]);
+	zp_print_color(id, "Health: ^4%d^1, Speed: ^4%d^1, Gravity: ^4%d",
+			floatround(tempClass[Health]),
+			(tempClass[Speed] <=  MAXSPEED_BARRIER_MAX ? floatround(tempClass[Speed] * KNIFE_MAXSPEED) : floatround(tempClass[Speed])), 
+			floatround(tempClass[Gravity] * 800.0));
+	
+	menu_destroy(menuid);
+	return PLUGIN_HANDLED;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _registerClassType(iPlugin, iParams) {
+	if (iParams > (ParamClassType-1)) {
+		return CLASSTYPE_NONE;
+	}
+	
+	if (g_aClassTypes == Invalid_Array || g_tClassTypeNames == Invalid_Trie) {
+		return CLASSTYPE_NONE;
+	}
+	
+	static tempClassType[ClassType], i, szTemp[32];
+	get_string(ParamClassType_name, tempClassType[TypeName], 31);
+	copy(szTemp, 31, tempClassType[TypeName]);
+	strtolower(szTemp);
+	if (TrieGetCell(g_tClassTypeNames, szTemp, i)) {
+		//zp_core_log_error("Class type already registered under this name (%s)", tempClassType[TypeName]);
+		return i;
+	}
+	
+	tempClassType[TeamID   ] = get_param(ParamClassType_teamid);
+	tempClassType[GroupList] = _:ArrayCreate();
+	get_array(ParamClassType_defclass, tempClassType[DefaultClass], Class);
+	
+	ArrayPushArray(g_aClassTypes, tempClassType);
+	TrieSetCell(g_tClassTypeNames, szTemp, g_iClassTypeNum);
+	
+	g_iClassTypeNum++;
+	
+	return g_iClassTypeNum-1;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _registerClassType2(iPlugin, iParams) {
+	if (iParams > (ParamClassType-2)) {
+		return CLASSTYPE_NONE;
+	}
+	
+	if (g_aClassTypes == Invalid_Array || g_tClassTypeNames == Invalid_Trie) {
+		return CLASSTYPE_NONE;
+	}
+	
+	static tempClassType[ClassType], i, szTemp[32];
+	get_string(ParamClassType_name, tempClassType[TypeName], 31);
+	copy(szTemp, 31, tempClassType[TypeName]);
+	strtolower(szTemp);
+	if (TrieGetCell(g_tClassTypeNames, szTemp, i)) {
+		//zp_core_log_error("Class type already registered under this name (%s)", tempClassType[TypeName]);
+		return i;
+	}
+	
+	tempClassType[TeamID      ] = get_param(ParamClassType_teamid);
+	tempClassType[GroupList   ] = _:ArrayCreate();
+	arraycopy(tempClassType[DefaultClass], g_defaultClass, Class);
+
+	ArrayPushArray(g_aClassTypes, tempClassType);
+	TrieSetCell(g_tClassTypeNames, szTemp, g_iClassTypeNum);
+	
+	g_iClassTypeNum++;
+	
+	return g_iClassTypeNum-1;
+}
+
+/**
+ * Adds a given class group to a specified class type.
+ * 
+ * @note		Only the type must exist beforehand. This is because
+ * 			this function is called during the class group registration
+ * 			process.
+ * 
+ * @param type		The class type receiving the group.
+ * @param group		The class group being added to the type.
+ */
+bool:_addGroupToType(type, group) {
+	if (!_classTypeExists(type)) {
+		zp_core_log_error("Invalid class type specified. (%d)", type);
+		return false;
+	}
+	
+	/*if (!_classGroupExists(group)) {
+		zp_core_log_error("Invalid class group specified. (%d)", group);
+		return false;
+	}*/
+	
+	static tempClassType[ClassType];
+	ArrayGetArray(g_aClassTypes, type, tempClassType);
+	ArrayPushCell(tempClassType[GroupList], group);
+	ArraySetArray(g_aClassTypes, type, tempClassType);
+	
+	return true;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public bool:_classTypeExists(type) {
+	return (!(type < 0 || type >= g_iClassTypeNum));
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _getClassTypeByName(iPlugin, iParams) {
+	if (iParams != 1) {
+		zp_core_log_error("Invalid parameter number. (Expected %d, Found %d)", 1, iParams);
+		return CLASSTYPE_NONE;
+	}
+	
+	new szClassTypeName[32], i;
+	get_string(1, szClassTypeName, 31);
+	strtolower(szClassTypeName);
+	if (TrieGetCell(g_tClassTypeNames, szClassTypeName, i)) {
+		return i;
+	}
+	
+	return CLASSTYPE_NONE;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _registerClassGroup(iPlugin, iParams) {
+	if (iParams != (ParamClassGroup-1)) {
+		return CLASSGROUP_NONE;
+	}
+	
+	if (g_aClassGroups == Invalid_Array || g_tClassGroupNames == Invalid_Trie) {
+		return CLASSTYPE_NONE;
+	}
+	
+	static tempClassGroup[ClassGroup], i, szTemp[32];
+	tempClassGroup[TypeID] = get_param(ParamClassGroup_typeid);
+	if (!_classTypeExists(tempClassGroup[TypeID])) {
+		zp_core_log_error("Invalid type id for group. (%d)", tempClassGroup[TypeID]);
+		return CLASSGROUP_NONE;
+	}
+	
+	get_string(ParamClassGroup_name, tempClassGroup[GroupName], 31);
+	copy(szTemp, 31, tempClassGroup[GroupName]);
+	strtolower(szTemp);
+	if (TrieGetCell(g_tClassGroupNames, szTemp, i)) {
+		//zp_core_log_error("Group already registered under this name (%s)", tempClassGroup[GroupName]);
+		return i;
+	}
+	
+	_addGroupToType(tempClassGroup[TypeID], g_iClassGroupNum);
+	tempClassGroup[ClassList] = _:ArrayCreate();
+	
+	ArrayPushArray(g_aClassGroups, tempClassGroup);
+	TrieSetCell(g_tClassGroupNames, szTemp, g_iClassGroupNum);
+	
+	g_iClassGroupNum++;
+	
+	return g_iClassGroupNum-1;
+}
+
+/**
+ * Adds a given class to a specified group.
+ * 
+ * @note		Only the group must exist beforehand. This is because
+ * 			this function is called during the class registration
+ * 			process.
+ * 
+ * @param group		The class group receiving the class.
+ * @param class		The class being added to the group.
+ */
+bool:_addClassToGroup(group, class) {
+	if (!_classGroupExists(group)) {
+		zp_core_log_error("Invalid class group specified. (%d)", group);
+		return false;
+	}
+	
+	/*if (!_classExists(class)) {
+		zp_core_log_error("Invalid class specified. (%d)", class);
+		return false;
+	}*/
+	
+	static tempClassGroup[ClassGroup];
+	ArrayGetArray(g_aClassGroups, group, tempClassGroup);
+	ArrayPushCell(tempClassGroup[ClassList], class);
+	ArraySetArray(g_aClassGroups, group, tempClassGroup);
+	
+	return true;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public bool:_classGroupExists(group) {
+	return (!(group < 0 || group >= g_iClassGroupNum));
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _getClassGroupByName(iPlugin, iParams) {
+	if (iParams != 1) {
+		zp_core_log_error("Invalid parameter number. (Expected %d, Found %d)", 1, iParams);
+		return CLASSGROUP_NONE;
+	}
+	
+	new szClassGroupName[32], i;
+	get_string(1, szClassGroupName, 31);
+	strtolower(szClassGroupName);
+	if (TrieGetCell(g_tClassGroupNames, szClassGroupName, i)) {
+		return i;
+	}
+	
+	return CLASSGROUP_NONE;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public Array:_getClassList(group) {
+	new tempClassGroup[ClassGroup];
+	ArrayGetArray(g_aClassGroups, group, tempClassGroup);
+	return tempClassGroup[ClassList];
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _registerClass(iPlugin, iParams) {
+	if (iParams != 1) {
+		return CLASS_NONE;
+	}
+	
+	if (g_aClasses == Invalid_Array || g_tClassNames == Invalid_Trie) {
+		return CLASSTYPE_NONE;
+	}
+	
+	static tempClass[Class], i;
+	get_array(1, tempClass, Class);
+	
+	if (!_classGroupExists(tempClass[GroupID])) {
+		zp_core_log_error("Invalid group specified for class (%d)", tempClass[GroupID]);
+		return CLASS_NONE;
+	}
+	
+	static szTemp[32];
+	copy(szTemp, 31, tempClass[ClassName]);
+	strtolower(szTemp);
+	if (TrieGetCell(g_tClassNames, szTemp, i)) {
+		//zp_core_log_error("Class already registered under this name (%s)", tempClass[ClassName]);
+		return i;
+	}
+	
+	if (tempClass[AbilityList] == Invalid_Array) {
+		tempClass[AbilityList] = _:ArrayCreate();
+	}
+	
+	_addClassToGroup(tempClass[GroupID], g_iClassNum);
+	ArrayPushArray(g_aClasses, tempClass);
+	TrieSetCell(g_tClassNames, szTemp, g_iClassNum);
+	
+	g_iClassNum++;
+	
+	return g_iClassNum-1;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public bool:_classExists(class) {
+	return (!(class < 0 || class >= g_iClassNum));
+}
+ 
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _getClassByName(iPlugin, iParams) {
+	if (iParams != 1) {
+		zp_core_log_error("Invalid parameter number. (Expected %d, Found %d)", 1, iParams);
+		return CLASS_NONE;
+	}
+	
+	new szClassName[32], i;
+	get_string(1, szClassName, 31);
+	strtolower(szClassName);
+	if (TrieGetCell(g_tClassNames, szClassName, i)) {
+		return i;
+	}
+	
+	return CLASS_NONE;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _addAbilityToClass(class, ability) {
+	if (!_classExists(class)) {
+		zp_core_log_error("Invalid class specified (%d)", class);
+		return -1;
+	}
+	
+	if (!_abilityExists(ability)) {
+		zp_core_log_error("Invalid ability specified (%d)", ability);
+	}
+	
+	static tempClass[Class];
+	ArrayGetArray(g_aClasses, class, tempClass);
+	
+	if (_classHasAbility(class, ability) == ABILITY_NONE) {
+		ArrayPushCell(tempClass[AbilityList], ability);
+		ArraySetArray(g_aClasses, class, tempClass);
+		return 1;
+	}
+	
+	return 0;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _removeAbilityFromClass(class, ability) {
+	if (!_classExists(class)) {
+		zp_core_log_error("Invalid class specified (%d)", class);
+		return -1;
+	}
+	
+	if (!_abilityExists(ability)) {
+		zp_core_log_error("Invalid ability specified (%d)", ability);
+	}
+	
+	static tempClass[Class];
+	ArrayGetArray(g_aClasses, class, tempClass);
+	
+	static internalAbility;
+	internalAbility = _classHasAbility(class, ability);
+	if (internalAbility != ABILITY_NONE) {
+		ArrayDeleteItem(tempClass[AbilityList], internalAbility);
+		ArraySetArray(g_aClasses, class, tempClass);
+		return 1;
+	}
+	
+	return 0;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _getClassAttribute(iPlugin, iParams) {
+	if (iParams > 4) {
+		zp_core_log_error("Invalid parameter number. (Expected %d<, Found %d)", 4, iParams);
+		return -1;
+	}
+	
+	static class;
+	class = get_param(1);
+	if (!_classExists(class)) {
+		zp_core_log_error("Invalid class specified. (%d)", class);
+		return -1;
+	}
+	
+	static tempClass[Class];
+	ArrayGetArray(g_aClasses, class, tempClass);
+	
+	static retValue;
+	retValue = 0;
+	switch (get_param(2)) {
+		case ZP_INT_groupid: {
+			retValue = tempClass[GroupID	];
+		}
+		case ZP_INT_localid: {
+			retValue = tempClass[LocalID	];
+		}
+		case ZP_INT_modelid: {
+			retValue = tempClass[ModelID	];
+		}
+		case ZP_INT_xpreq: {
+			retValue = tempClass[XPReq	];
+		}
+		case ZP_INT_adminlvl: {
+			retValue = tempClass[AdminLevel	];
+		}
+		case ZP_INT_curnumber: {
+			retValue = tempClass[CurNumber	];
+		}
+		case ZP_INT_maxnumber: {
+			retValue = tempClass[MaxNumber	];
+		}
+		case ZP_FL_health: {
+			retValue = _:tempClass[Health	];
+		}
+		case ZP_FL_speed: {
+			retValue = _:tempClass[Speed	];
+		}
+		case ZP_FL_gravity: {
+			retValue = _:tempClass[Gravity	];
+		}
+		case ZP_AY_abilitylist: {
+			retValue = _:tempClass[AbilityList];
+		}
+		case ZP_SZ_name: {
+			set_string(3, tempClass[ClassName], get_param(4));
+		}
+		case ZP_SZ_desc: {
+			set_string(3, tempClass[ClassDesc], get_param(4));
+		}
+	}
+	
+	set_param_byref(3, retValue);
+	return retValue;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _setClassAttribute(iPlugin, iParams) {
+	if (iParams > 4) {
+		zp_core_log_error("Invalid parameter number. (Expected %d<, Found %d)", 4, iParams);
+		return -1;
+	}
+	
+	static class;
+	class = get_param(1);
+	if (!_classExists(class)) {
+		zp_core_log_error("Invalid class specified. (%d)", class);
+		return -1;
+	}
+	
+	static tempClass[Class];
+	ArrayGetArray(g_aClasses, class, tempClass);
+	
+	static retValue, bool:forceValue, tempClassGroup[ClassGroup], tempClassType[ClassType];
+	retValue = get_param_byref(4);
+	forceValue = !!get_param(3);
+	ArrayGetArray(g_aClassGroups, tempClass[GroupID], tempClassGroup);
+	ArrayGetArray(g_aClassTypes, tempClassGroup[TypeID], tempClassType);
+	
+	switch (get_param(2)) {
+		case ZP_INT_localid: {
+			if (!forceValue && tempClass[LocalID	] != tempClassType[DefaultClass][LocalID	]) {
+				return -1;
+			}
+			
+			tempClass[LocalID	] = retValue;
+		}
+		case ZP_INT_modelid: {
+			if (!forceValue && tempClass[ModelID	] != tempClassType[DefaultClass][ModelID	]) {
+				return -1;
+			}
+			
+			tempClass[ModelID	] = retValue;
+		}
+		case ZP_INT_xpreq: {
+			if (!forceValue && tempClass[XPReq	] != tempClassType[DefaultClass][XPReq		]) {
+				return -1;
+			}
+			
+			retValue = clamp(retValue, 0);
+			tempClass[XPReq		] = retValue;
+		}
+		case ZP_INT_adminlvl: {
+			if (!forceValue && tempClass[AdminLevel	] != tempClassType[DefaultClass][AdminLevel	]) {
+				return -1;
+			}
+			
+			retValue = clamp(retValue, 0);
+			tempClass[AdminLevel	] = retValue;
+		}
+		case ZP_INT_curnumber: {
+			if (!forceValue && tempClass[CurNumber	] != tempClassType[DefaultClass][CurNumber	]) {
+				return -1;
+			}
+			
+			retValue = clamp(retValue, 0);
+			tempClass[CurNumber	] = retValue;
+		}
+		case ZP_INT_maxnumber: {
+			if (!forceValue && tempClass[MaxNumber	] != tempClassType[DefaultClass][MaxNumber	]) {
+				return -1;
+			}
+			
+			retValue = clamp(retValue, 0);
+			tempClass[MaxNumber	] = retValue;
+		}
+		case ZP_FL_health: {
+			if (!forceValue && tempClass[Health	] != tempClassType[DefaultClass][Health		]) {
+				return -1;
+			}
+			
+			if (Float:retValue < 1.0) {
+				retValue = _:1.0;
+			}
+			tempClass[Health	] = retValue;
+		}
+		case ZP_FL_speed: {
+			if (!forceValue && tempClass[Speed	] != tempClassType[DefaultClass][Speed		]) {
+				return -1;
+			}
+			
+			if (Float:retValue <= 0.0) {
+				retValue = _:1.0;
+			}
+			tempClass[Speed		] = retValue;
+		}
+		case ZP_FL_gravity: {
+			if (!forceValue && tempClass[Gravity	] != tempClassType[DefaultClass][Gravity	]) {
+				return -1;
+			}
+			
+			if (Float:retValue <= 0.0) {
+				retValue = _:1.0;
+			}
+			tempClass[Gravity	] = retValue;
+		}
+		case ZP_SZ_desc: {
+			get_string(4, tempClass[ClassDesc], 31);
+		}
+	}
+	
+	ArraySetArray(g_aClasses, class, tempClass);
+	
+	return retValue;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public Array:_getClassTypeArray() {
+	return g_aClassTypes;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public Array:_getClassGroupArray() {
+	return g_aClassGroups;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public Array:_getClassArray() {
+	return g_aClasses;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public Array:_getAbilityArray() {
+	return g_aClassAbilities;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _setDefaultClass(iPlugin, iParams) {
+	if (iParams != 2) {
+		return;
+	}
+	
+	new type;
+	type = get_param(1);
+	if (!_classTypeExists(type)) {
+		return;
+	}
+	
+	new tempClassType[ClassType];
+	ArrayGetArray(g_aClassTypes, type, tempClassType);
+	get_array(2, tempClassType, Class);
+	ArraySetArray(g_aClassTypes, type, tempClassType);
+}
+
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _registerAbility(iPlugin, iParams) {
+	if (iParams > (ParamClassAbility-1)) {
+		return ABILITY_NONE;
+	}
+	
+	if (g_aClassAbilities == Invalid_Array || g_tClassAbilityNames == Invalid_Trie) {
+		return CLASSTYPE_NONE;
+	}
+	
+	static tempClassAbility[ClassAbility], i, szTemp[32];
+	get_string(ParamClassAbility_name, tempClassAbility[AbilityName], 31);
+	copy(szTemp, 31, tempClassAbility[AbilityName]);
+	strtolower(szTemp);
+	if (TrieGetCell(g_tClassAbilityNames, szTemp, i)) {
+		//zp_core_log_error("Ability already registered under this name (%s)", tempClassAbility[AbilityName]);
+		return i;
+	}
+	
+	get_string(ParamClassAbility_desc, tempClassAbility[AbilityDesc], 63);
+	
+	ArrayPushArray(g_aClassAbilities, tempClassAbility);
+	TrieSetCell(g_tClassAbilityNames, szTemp, g_iClassAbilityNum);
+	
+	g_iClassAbilityNum++;
+	
+	return g_iClassAbilityNum-1;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _getAbilityByName(iPlugin, iParams) {
+	if (iParams != 1) {
+		zp_core_log_error("Invalid parameter number. (Expected %d, Found %d)", 1, iParams);
+		return ABILITY_NONE;
+	}
+	
+	new szAbilityName[32], i;
+	get_string(1, szAbilityName, 31);
+	strtolower(szAbilityName);
+	if (TrieGetCell(g_tClassAbilityNames, szAbilityName, i)) {
+		return i;
+	}
+	
+	return ABILITY_NONE;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _classHasAbility(class, ability) {
+	if (!_classExists(class)) {
+		return ABILITY_NONE;
+	}
+	
+	if (!_abilityExists(ability)) {
+		return ABILITY_NONE;
+	}
+	
+	static tempClass[Class];
+	ArrayGetArray(g_aClasses, class, tempClass);
+	
+	new size = ArraySize(tempClass[AbilityList]);
+	for (new i; i < size; i++) {
+		if (ArrayGetCell(tempClass[AbilityList], i) == ability) {
+			return i;
+		}
+	}
+	
+	return ABILITY_NONE;
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public _getAbilityName(ability) {
+	static tempClassAbility[ClassAbility];
+	if (_abilityExists(ability)) {
+		ArrayGetArray(g_aClassAbilities, ability, tempClassAbility);
+	} else {
+		tempClassAbility[AbilityName][0] = '^0';
+	}
+	
+	return tempClassAbility[AbilityName];
+}
+
+/**
+ * @see ZP_ClassModule.inc
+ */
+public bool:_abilityExists(ability) {
+	return (!(ability < 0 || ability >= g_iClassAbilityNum));
+}
+/* AMXX-Studio Notes - DO NOT MODIFY BELOW HERE
+*{\\ rtf1\\ ansi\\ deff0{\\ fonttbl{\\ f0\\ fnil Tahoma;}}\n\\ viewkind4\\ uc1\\ pard\\ lang1033\\ f0\\ fs16 \n\\ par }
+*/
